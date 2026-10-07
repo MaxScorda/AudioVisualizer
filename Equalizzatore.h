@@ -8,8 +8,6 @@
 
 static float band_values[48] = {0};
 static float peak_values[48] = {0};
-static int drawn_blocks[48];   // ultimi blocchi disegnati
-static int drawn_peak[48];
 
 static const uint16_t eq_colors[16] = {
   0x780F, 0x9011, 0xA814, 0xF812, 0xF800, 0xFA00, 0xFD00, 0xFFE0,
@@ -27,10 +25,7 @@ static const uint16_t winamp_colors[12] = {
 
 inline void equalizzatore_init(LTDC_F746_Discovery &tft, int main_area_w) {
   tft.fillRect(eq_xmin, eq_ymin, main_area_w, eq_ymax - eq_ymin + 1, LTDC_BLACK);
-  for (int i = 0; i < 48; i++) {
-    band_values[i] = 0; peak_values[i] = 0;
-    drawn_blocks[i] = 0; drawn_peak[i] = -1;
-  }
+  for (int i = 0; i < 48; i++) { band_values[i] = 0; peak_values[i] = 0; }
 }
 
 inline void equalizzatore_update(float* real, int signalLength, LTDC_F746_Discovery &tft,
@@ -75,59 +70,23 @@ inline void equalizzatore_update(float* real, int signalLength, LTDC_F746_Discov
     }
 
     int x = eq_xmin + gapX + b * (barWidth + gapX);
-    int oldB = drawn_blocks[b];
 
-    // Solo delta: sale → disegna blocchi nuovi; scende → cancella neri
-    if (activeBlocks > oldB) {
-      for (int blk = oldB; blk < activeBlocks; blk++) {
-        int y = eq_ymax - (blk + 1) * (blockHeight + gapY);
+    for (int blk = 0; blk < EQ_MAX_BLOCKS; blk++) {
+      int y = eq_ymax - (blk + 1) * (blockHeight + gapY);
+      if (blk < activeBlocks) {
         uint16_t color;
         if (color_mode == 1) color = vu_colors[blk];
         else if (color_mode == 2) color = winamp_colors[blk];
         else color = eq_colors[(b * 16) / eq_bands];
         tft.fillRect(x, y, barWidth, blockHeight, color);
-      }
-    } else if (activeBlocks < oldB) {
-      for (int blk = activeBlocks; blk < oldB; blk++) {
-        int y = eq_ymax - (blk + 1) * (blockHeight + gapY);
+      } else {
         tft.fillRect(x, y, barWidth, blockHeight, LTDC_BLACK);
       }
     }
-    drawn_blocks[b] = activeBlocks;
 
-    // Peak hold: cancella vecchio, disegna nuovo solo se cambia
-    if (peak_enable) {
-      if (drawn_peak[b] != peakBlk) {
-        if (drawn_peak[b] >= 0) {
-          int py = eq_ymax - (drawn_peak[b] + 1) * (blockHeight + gapY);
-          // se quel blocco non e' attivo, resta nero; se attivo ridisegna colore barra
-          if (drawn_peak[b] < activeBlocks) {
-            uint16_t color;
-            if (color_mode == 1) color = vu_colors[drawn_peak[b]];
-            else if (color_mode == 2) color = winamp_colors[drawn_peak[b]];
-            else color = eq_colors[(b * 16) / eq_bands];
-            tft.fillRect(x, py, barWidth, blockHeight, color);
-          } else {
-            tft.fillRect(x, py, barWidth, blockHeight, LTDC_BLACK);
-          }
-        }
-        if (peakBlk > 0) {
-          int py = eq_ymax - (peakBlk + 1) * (blockHeight + gapY);
-          tft.fillRect(x, py, barWidth, 2, LTDC_WHITE);
-        }
-        drawn_peak[b] = peakBlk;
-      }
-    } else if (drawn_peak[b] >= 0) {
-      int py = eq_ymax - (drawn_peak[b] + 1) * (blockHeight + gapY);
-      if (drawn_peak[b] < activeBlocks) {
-        uint16_t color = (color_mode == 1) ? vu_colors[drawn_peak[b]] :
-                         (color_mode == 2) ? winamp_colors[drawn_peak[b]] :
-                         eq_colors[(b * 16) / eq_bands];
-        tft.fillRect(x, py, barWidth, blockHeight, color);
-      } else {
-        tft.fillRect(x, py, barWidth, blockHeight, LTDC_BLACK);
-      }
-      drawn_peak[b] = -1;
+    if (peak_enable && peakBlk > 0) {
+      int py = eq_ymax - (peakBlk + 1) * (blockHeight + gapY);
+      tft.fillRect(x, py, barWidth, 2, LTDC_WHITE);
     }
   }
 }

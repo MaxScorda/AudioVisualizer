@@ -2,7 +2,7 @@
 #define PERSISTENZA_H
 
 #define PS_W 200
-#define PS_H 65
+#define PS_H 64
 static uint8_t ps_buf[PS_W * PS_H];
 static int ps_line = 0;
 
@@ -21,7 +21,6 @@ inline void persistenza_update(float* real, int signalLength, LTDC_F746_Discover
   int bins = PS_H;
   if (bins > signalLength / 2) bins = signalLength / 2;
 
-  // Decay LENTO: la scia resta visibile a lungo (diverso dallo spettrogramma)
   for (int i = 0; i < PS_W * PS_H; i++) {
     if (ps_buf[i] > 1) ps_buf[i] -= 1;
     else ps_buf[i] = 0;
@@ -40,21 +39,23 @@ inline void persistenza_update(float* real, int signalLength, LTDC_F746_Discover
     int val = (int)(gain * 4.0f * (real[n] - Amin));
     if (val > 255) val = 255;
     if (val < 0) val = 0;
-    // boost se vicino al max
     if (Amax > Amin && real[n] > Amax * 0.7f) val = (val + 255) / 2;
     int idx = n * PS_W + ps_line;
     if (val > ps_buf[idx]) ps_buf[idx] = (uint8_t)val;
   }
 
-  // Ridisegna TUTTE le colonne (mostra scia completa)
+  // area grafica y=28..270 (niente striscia nera sotto)
+  const int y0 = 28;
+  const int y1 = 270;
+  const int usable = y1 - y0;
+
   for (int x = 0; x < w; x++) {
     for (int n = 0; n < bins; n++) {
       uint8_t v = ps_buf[n * PS_W + x];
       if (v < 4) continue;
-      int y = 30 + (bins - 1 - n) * 3;
-      if (y > 268) y = 268;
+      int y = y0 + (usable * (bins - 1 - n)) / bins;
       int px = x * 2;
-      if (px < main_area_w) {
+      if (px < main_area_w && y >= y0 && y <= y1) {
         tft.drawPixel(px, y, heatmap[v]);
         if (px + 1 < main_area_w) tft.drawPixel(px + 1, y, heatmap[v]);
       }

@@ -4,12 +4,15 @@
 static float beat_env = 0;
 static float beat_avg = 0.01f;
 static uint8_t beat_flash = 0;
+static int beat_drawn_h = 0;
+static int beat_drawn_th = -1;
+static int8_t beat_shown = -1;
 
 inline void beat_meter_init(LTDC_F746_Discovery &tft, int main_area_w) {
   tft.fillRect(0, 11, main_area_w, 261, LTDC_BLACK);
   beat_env = 0; beat_avg = 0.01f; beat_flash = 0;
+  beat_drawn_h = 0; beat_drawn_th = -1; beat_shown = -1;
 
-  // Una sola riga di aiuto, fissa, ben separata dalla zona dinamica
   tft.setTextColor(LTDC_CYAN, LTDC_BLACK);
   tft.setTextSize(1);
   tft.setCursor(8, 14);
@@ -32,28 +35,44 @@ inline void beat_meter_update(float* real, int signalLength, LTDC_F746_Discovery
   if (beat) beat_flash = 12;
   if (beat_flash > 0) beat_flash--;
 
-  // Zona dinamica: tutto sotto y=30 (header intatto)
-  const int top = 30;
-  tft.fillRect(0, top, main_area_w, 272 - top, LTDC_BLACK);
-
-  // Stato grande e pulito
-  tft.setTextSize(3);
-  tft.setTextColor(beat_flash ? LTDC_RED : 0x4208, LTDC_BLACK);
-  tft.setCursor(main_area_w / 2 - 50, 40);
-  tft.print(beat_flash ? "BEAT" : "----");
-
-  // Barra
   int h = (int)(beat_env * 100.0f);
   if (h > 180) h = 180;
   if (h < 0) h = 0;
-  uint16_t barCol = beat_flash ? 0xF800 : 0xFFE0;
-  int bx = main_area_w / 2 - 35;
-  tft.fillRect(bx, 271 - h, 70, h, barCol);
-
-  // Linea media
   int th = (int)(beat_avg * 100.0f);
   if (th > 180) th = 180;
-  tft.drawFastHLine(bx - 15, 271 - th, 100, 0x07FF);
+
+  int bx = main_area_w / 2 - 35;
+  int base = 270;
+  uint16_t barCol = beat_flash ? 0xF800 : 0xFFE0;
+
+  int state = beat_flash ? 1 : 0;
+  if (state != beat_shown) {
+    beat_shown = state;
+    tft.fillRect(main_area_w / 2 - 55, 40, 120, 28, LTDC_BLACK);
+    tft.setTextSize(3);
+    tft.setTextColor(state ? LTDC_RED : 0x4208, LTDC_BLACK);
+    tft.setCursor(main_area_w / 2 - 50, 40);
+    tft.print(state ? "BEAT" : "----");
+  }
+
+  // barra piena: se cambia altezza o colore, ridisegna in modo pulito
+  static uint16_t lastCol = 0;
+  if (h != beat_drawn_h || barCol != lastCol) {
+    // cancella vecchia
+    if (beat_drawn_h > 0)
+      tft.fillRect(bx, base - beat_drawn_h, 70, beat_drawn_h, LTDC_BLACK);
+    if (h > 0)
+      tft.fillRect(bx, base - h, 70, h, barCol);
+    beat_drawn_h = h;
+    lastCol = barCol;
+  }
+
+  if (th != beat_drawn_th) {
+    if (beat_drawn_th >= 0)
+      tft.drawFastHLine(bx - 15, base - beat_drawn_th, 100, LTDC_BLACK);
+    tft.drawFastHLine(bx - 15, base - th, 100, 0x07FF);
+    beat_drawn_th = th;
+  }
 }
 
 #endif

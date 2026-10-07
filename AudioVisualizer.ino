@@ -168,6 +168,20 @@ static const char* view_name(int v) {
   }
 }
 
+
+// Riga messaggi in alto (unica): SD + stato AUTO, senza sovrapposizioni
+void draw_status_line() {
+  tft.fillRect(0, 0, main_area_w, 10, LTDC_BLACK);
+  tft.setTextSize(1);
+  tft.setTextColor(settings_eeprom_ok ? LTDC_GREEN : LTDC_YELLOW, LTDC_BLACK);
+  tft.setCursor(0, 1);
+  tft.print(settings_status_text());
+  if (auto_cycle) {
+    tft.setTextColor(LTDC_CYAN, LTDC_BLACK);
+    tft.print(" | AUTO");
+  }
+}
+
 void draw_sidebar() {
   tft.drawLine(main_area_w, 0, main_area_w, 272, LTDC_WHITE);
   tft.fillRect(main_area_w + 1, 0, sidebar_w - 1, 272, LTDC_BLACK);
@@ -215,16 +229,14 @@ void draw_sidebar() {
     else tft.print("R:SLOW");
   }
 
+  // Info vista/gain in basso (niente SD qui — solo in alto)
+  tft.fillRect(btn_x, 238, btn_w, 34, LTDC_BLACK);
   tft.setTextColor(LTDC_WHITE, LTDC_BLACK);
-  tft.setCursor(btn_x + 2, 240);
+  tft.setCursor(btn_x + 2, 242);
   tft.print("V:"); tft.print(viewMode);
-  tft.setCursor(btn_x + 2, 252);
+  tft.setCursor(btn_x + 2, 256);
   tft.print("G:");
-  tft.print(view_gain[viewMode], 3);
-  // SD status
-  tft.setCursor(btn_x + 2, 262);
-  tft.setTextColor(settings_sd_ok ? LTDC_GREEN : LTDC_YELLOW, LTDC_BLACK);
-  tft.print(settings_status_text());
+  tft.print(view_gain[viewMode], 4);
 }
 
 void trigger_view_change() {
@@ -243,6 +255,7 @@ void trigger_view_change() {
     case 14: vu_needle_init(tft, main_area_w); break;
   }
   draw_sidebar();
+  draw_status_line();
 }
 
 
@@ -256,9 +269,7 @@ void handle_user_button() {
     auto_cycle = !auto_cycle;
     auto_cycle_ms = millis();
     draw_sidebar();
-    tft.setTextColor(LTDC_CYAN, LTDC_BLACK);
-    tft.setCursor(80, 1);
-    tft.print(auto_cycle ? "AUTO ON " : "AUTO OFF");
+    draw_status_line(); // aggiorna "AUTO" in alto, senza residui
     Serial.println(auto_cycle ? "USER: AUTO ON" : "USER: AUTO OFF");
   }
   prev = now;
@@ -383,12 +394,7 @@ void setup() {
   Serial.println(settings_status_text());
   delay(400);
   tft.fillScreen(LTDC_BLACK);
-  trigger_view_change();
-  // riga messaggi in alto a sinistra
-  tft.setTextSize(1);
-  tft.setTextColor(settings_sd_ok ? LTDC_GREEN : LTDC_YELLOW, LTDC_BLACK);
-  tft.setCursor(0, 1);
-  tft.print(settings_status_text());
+  trigger_view_change(); // include draw_status_line
 }
 
 void loop() {
@@ -403,11 +409,7 @@ void loop() {
     viewMode++;
     if (viewMode >= VIEW_COUNT) viewMode = 0;
     settings_mark_dirty();
-    trigger_view_change();
-    tft.setTextColor(settings_sd_ok ? LTDC_GREEN : LTDC_YELLOW, LTDC_BLACK);
-    tft.setCursor(0, 1);
-    tft.print(settings_status_text());
-    tft.print(" AUTO");
+    trigger_view_change(); // ridisegna sidebar + status line
   }
 
   uint32_t twait = millis();
