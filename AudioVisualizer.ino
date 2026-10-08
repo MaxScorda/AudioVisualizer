@@ -2,7 +2,7 @@
 // AudioVisualizer — STM32F746G-DISCOVERY
 // =============================================================================
 // Visualizzatore audio in tempo reale:
-//   - ingresso: microfono digitale a bordo (SAI2 + codec WM8994, DMA circolare)
+//   - ingresso: microfono digitale (SAI2 + WM8994, DMA circolare)
 //   - display: LCD 480x272 via LTDC + libreria LTDC_F746_Discovery
 //   - touch: FT5336 (sidebar comandi)
 //   - impostazioni: EEPROM (Settings.h) — niente SD in questo sketch
@@ -113,7 +113,7 @@ float view_gain[VIEW_COUNT] = {
   0.08f,   // 11 persistenza
   0.02f,   // 12 beat
   0.08f,   // 13 mesh 3D
-  0.050f   // 14 VU lancette
+  8.0f     // 14 VU lancette (sensibilita' tipica 5..15)
 };
 
 // Dopo view_gain / VIEW_COUNT: Settings usa queste variabili
@@ -138,6 +138,9 @@ volatile uint8_t  dma_section = 0;      // 0 = half, 1 = full
 #define AUDIO_FREQ          AUDIO_FREQUENCY_16K
 
 extern SAI_HandleTypeDef haudio_in_sai;
+
+// CPU% (media mobile lavoro/periodo frame DMA)
+static float cpu_percent = 0;
 
 // ---------------------------------------------------------------------------
 // Callback audio BSP + handler DMA/SAI
@@ -192,7 +195,7 @@ static const char* view_name(int v) {
     case 3:  return "EQ 32 Bande  ";
     case 4:  return "EQ 48 Bande  ";
     case 5:  return "Waveform     ";
-    case 6:  return "Spec Linear  ";
+    case 6:  return "Spec Log      ";
     case 7:  return "VU L/R       ";
     case 8:  return "WF + Peak    ";
     case 9:  return "Pitch/Note   ";
@@ -209,13 +212,43 @@ static const char* view_name(int v) {
 void draw_status_line() {
   tft.fillRect(0, 0, main_area_w, 10, LTDC_BLACK);
   tft.setTextSize(1);
-  tft.setTextColor(settings_eeprom_ok ? LTDC_GREEN : LTDC_YELLOW, LTDC_BLACK);
-  tft.setCursor(0, 1);
-  tft.print(settings_status_text());
+
+  // Sinistra: EEPROM + AUTO (SaveEE in rosso durante scrittura)
+  {
+    const char* st = settings_status_text();
+    uint16_t col = LTDC_YELLOW;
+    if (settings_status_is_saving()) col = LTDC_RED;
+    else if (settings_eeprom_ok)     col = LTDC_GREEN;
+    tft.setTextColor(col, LTDC_BLACK);
+    tft.setCursor(0, 1);
+    tft.print(st);
+    // padding se stringa corta (evita residui)
+    tft.print("   ");
+  }
   if (auto_cycle) {
     tft.setTextColor(LTDC_CYAN, LTDC_BLACK);
-    tft.print(" | AUTO");
+    tft.print(" AUTO");
   }
+
+  // Centro: nome vista
+  tft.setTextColor(LTDC_GREEN, LTDC_BLACK);
+  tft.setCursor(100, 1);
+  tft.print(view_name(viewMode));
+
+  // Destra: CPU% (verde <70, bianco 70-89, giallo 90-99, rosso 100)
+  char buf[12];
+  int pct = (int)(cpu_percent + 0.5f);
+  if (pct > 100) pct = 100;
+  snprintf(buf, sizeof(buf), "CPU%2d%%", pct);
+  int tw = (int)strlen(buf) * 6;
+  uint16_t cpu_col;
+  if (pct >= 100)     cpu_col = LTDC_RED;
+  else if (pct >= 90) cpu_col = LTDC_YELLOW;
+  else if (pct >= 70) cpu_col = LTDC_WHITE;
+  else                cpu_col = LTDC_GREEN;
+  tft.setTextColor(cpu_col, LTDC_BLACK);
+  tft.setCursor(main_area_w - tw - 2, 1);
+  tft.print(buf);
 }
 
 // Sidebar touch a destra (VIEW / GAIN / AUTO / COLOR|RES / PK)
@@ -256,35 +289,41 @@ void draw_sidebar() {
 
   // COLOR (EQ / onda) oppure RES (spettrogramma)
   if (is_color_mode()) {
-    tft.fillRect(btn_x, 164, btn_w, 28, 0x8800);
-    tft.setCursor(btn_x + 5, 172);
+    tft.fillRect(btn_x, 164, btn_w, 28, 0x8800);  // arancio scuro (non rosa)
+    tft.setTextColor(LTDC_WHITE, 0x8800);
+    tft.setCursor(btn_x + 5, 168);
     tft.print("COLOR");
-    tft.setCursor(btn_x + 2, 196);
+    tft.setCursor(btn_x + 5, 180);
     tft.print("C:");
     tft.print(viewMode == 5 ? onda_color_mode : eq_color_mode);
-
-    if (is_eq_mode()) {
-      tft.fillRect(btn_x, 210, btn_w, 24, eq_peak_enable ? 0x0540 : 0x4208);
-      tft.setCursor(btn_x + 5, 216);
-      tft.print(eq_peak_enable ? "PK ON" : "PK OFF");
-    }
   } else if (is_spectro_mode()) {
     tft.fillRect(btn_x, 164, btn_w, 28, 0x8010);
-    tft.setCursor(btn_x + 5, 172);
+    tft.setTextColor(LTDC_WHITE, 0x8010);
+    tft.setCursor(btn_x + 5, 168);
     tft.print("RES");
-    tft.setCursor(btn_x + 2, 196);
-    if (spectro_res == 0)      tft.print("R:NOR");
-    else if (spectro_res == 1) tft.print("R:FAST");
-    else                       tft.print("R:SLOW");
+    tft.setCursor(btn_x + 5, 180);
+    if (spectro_res == 0)      tft.print("NOR");
+    else if (spectro_res == 1) tft.print("FAST");
+    else                       tft.print("SLOW");
   }
 
-  // Vista e gain correnti
-  tft.fillRect(btn_x, 238, btn_w, 34, LTDC_BLACK);
+  // Peak EQ
+  if (is_eq_mode()) {
+    uint16_t pkc = eq_peak_enable ? 0x0540 : 0x4208;
+    tft.fillRect(btn_x, 196, btn_w, 22, pkc);
+    tft.setTextColor(LTDC_WHITE, pkc);
+    tft.setCursor(btn_x + 5, 202);
+    tft.print(eq_peak_enable ? "PK ON" : "PK OFF");
+  }
+
+  // Vista e gain
+  tft.fillRect(btn_x, 230, btn_w, 40, LTDC_BLACK);
   tft.setTextColor(LTDC_WHITE, LTDC_BLACK);
-  tft.setCursor(btn_x + 2, 242);
+  tft.setTextColor(LTDC_WHITE, LTDC_BLACK);
+  tft.setCursor(btn_x + 2, 238);
   tft.print("V:");
   tft.print(viewMode);
-  tft.setCursor(btn_x + 2, 256);
+  tft.setCursor(btn_x + 2, 252);
   tft.print("G:");
   tft.print(view_gain[viewMode], 4);
 }
@@ -392,7 +431,7 @@ void handle_touch() {
     if (spectro_res > 2) spectro_res = 0;
     settings_mark_dirty();
     draw_sidebar();
-  } else if (ty >= 210 && ty <= 234 && is_eq_mode()) {
+  } else if (ty >= 196 && ty <= 218 && is_eq_mode()) {
     // Peak hold EQ
     eq_peak_enable = !eq_peak_enable;
     settings_mark_dirty();
@@ -444,7 +483,8 @@ void setup() {
   tft.print("Init Audio...");
   Serial.println("TFT OK");
 
-  // Audio in (microfono digitale)
+  // Audio MIC (path stabile, niente switch LINE)
+  Serial.println("Audio...");
   uint8_t st = BSP_AUDIO_IN_InitEx(
     AUDIO_INPUT_SOURCE,
     AUDIO_FREQ,
@@ -462,34 +502,34 @@ void setup() {
     HAL_NVIC_EnableIRQ(DMA2_Stream4_IRQn);
     HAL_NVIC_SetPriority(SAI2_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(SAI2_IRQn);
-
-    uint8_t r = BSP_AUDIO_IN_Record(
-      (uint16_t *)audio_dma_buffer, SIGNAL_LENGTH
-    );
+    uint8_t r = BSP_AUDIO_IN_Record((uint16_t*)audio_dma_buffer, SIGNAL_LENGTH);
     Serial.print("Record=");
     Serial.println(r);
     tft.setCursor(0, 10);
-    tft.print("OK rec=");
-    tft.println(r);
+    tft.print("Audio OK");
   } else {
     tft.setCursor(0, 10);
     tft.setTextColor(LTDC_RED);
-    tft.print("Audio ERROR ");
+    tft.print("Audio ERR ");
     tft.println(st);
   }
 
-  delay(800);
+  delay(400);
   tft.fillScreen(LTDC_BLACK);
   memset(sample_hist, 0, sizeof(sample_hist));
   memset(sample_hist_r, 0, sizeof(sample_hist_r));
 
-  // Carica impostazioni da EEPROM (se presenti)
-  Serial.println("Load settings (EEPROM)...");
-  if (settings_load()) Serial.println("Settings LOADED");
-  else                 Serial.println("Using defaults");
-  Serial.println(settings_status_text());
+  // EEPROM DOPO audio (mai prima: rischiava hang)
+  Serial.println("Settings...");
+  Serial.flush();
+  if (settings_load()) Serial.println("EEPROM OK");
+  else Serial.println("defaults");
+  Serial.flush();
 
-  delay(400);
+  // Se AUTO era salvato ON, riparte il timer ciclo
+  if (auto_cycle) auto_cycle_ms = millis();
+
+  delay(100);
   tft.fillScreen(LTDC_BLACK);
   trigger_view_change();
 }
@@ -499,10 +539,15 @@ void setup() {
 // ---------------------------------------------------------------------------
 void loop() {
   static bool printed = false;
+  static uint32_t t_frame = 0;
 
   handle_touch();
   handle_user_button();
+  bool was_saving = settings_status_is_saving();
   settings_autosave_poll();
+  // Aggiorna riga stato quando compare/scompare SaveEE
+  if (was_saving != settings_status_is_saving())
+    draw_status_line();
 
   // AUTO: ogni 60 s passa alla vista successiva (senza salvare ogni passo)
   if (auto_cycle && (millis() - auto_cycle_ms >= 60000UL)) {
@@ -512,18 +557,23 @@ void loop() {
     trigger_view_change();
   }
 
-  // Attende un nuovo blocco DMA (timeout diagnostico)
+  // Attende un nuovo blocco DMA
   uint32_t twait = millis();
   while (!audio_ready) {
     if (millis() - twait > 2000) {
       tft.setCursor(0, 1);
-      tft.setTextColor(LTDC_YELLOW);
+      tft.setTextColor(LTDC_YELLOW, LTDC_BLACK);
       tft.print("IRQ=");
       tft.print(irq_count);
       return;
     }
   }
   audio_ready = false;
+
+  uint32_t t_work0 = micros();
+  uint32_t period = t_work0 - t_frame;
+  if (t_frame == 0) period = 1;
+  t_frame = t_work0;
 
   // Copia il blocco stereo corrente (half o full)
   const int frames = SIGNAL_LENGTH / 2;
@@ -586,14 +636,10 @@ void loop() {
     delay(600);
   }
 
-  // Nome vista in alto a destra (solo al cambio)
+  // Nome vista: aggiornato in draw_status_line()
   if (OldviewMode != viewMode) {
     OldviewMode = viewMode;
-    tft.setTextColor(LTDC_GREEN, LTDC_BLACK);
-    tft.setCursor(220, 1);
-    tft.print("              ");
-    tft.setCursor(220, 1);
-    tft.print(view_name(viewMode));
+    draw_status_line();
   }
 
   const float g = view_gain[viewMode];
@@ -623,7 +669,7 @@ void loop() {
     case 3: equalizzatore_update(real, SIGNAL_LENGTH, tft, main_area_w, 32, g, eq_color_mode, eq_peak_enable); break;
     case 4: equalizzatore_update(real, SIGNAL_LENGTH, tft, main_area_w, 48, g, eq_color_mode, eq_peak_enable); break;
     case 5: onda_update(rawL, frames, tft, main_area_w, g, onda_color_mode); break;
-    case 6: spettro_lineare_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
+    case 6: spettro_lineare_update(real, SIGNAL_LENGTH, (float)AUDIO_FREQ, tft, main_area_w, g); break;
     case 7: vu_meter_update(rawL, rawR, frames, tft, main_area_w, g); break;
     case 8:
       if (dma_section == 1)
@@ -639,5 +685,18 @@ void loop() {
     case 13: mesh3d_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
     case 14: vu_needle_update(rawL, rawR, frames, tft, main_area_w, g); break;
     default: break;
+  }
+
+  // CPU%: lavoro di questo frame / periodo tra callback DMA
+  uint32_t work = micros() - t_work0;
+  float inst = (period > 0) ? (100.0f * (float)work / (float)period) : 0;
+  if (inst > 100.f) inst = 100.f;
+  cpu_percent = cpu_percent * 0.85f + inst * 0.15f;
+
+  // Aggiorna riga stato (CPU) ogni tanto, senza ogni frame
+  static uint8_t cpu_div = 0;
+  if (++cpu_div >= 8) {
+    cpu_div = 0;
+    draw_status_line();
   }
 }
