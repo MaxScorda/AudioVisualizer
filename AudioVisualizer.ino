@@ -134,8 +134,22 @@ volatile bool     audio_ready = false;  // nuovo blocco DMA pronto
 volatile uint32_t irq_count   = 0;      // diagnostica IRQ
 volatile uint8_t  dma_section = 0;      // 0 = half, 1 = full
 
-#define AUDIO_INPUT_SOURCE  INPUT_DEVICE_DIGITAL_MICROPHONE_2
-#define AUDIO_FREQ          AUDIO_FREQUENCY_16K
+// =============================================================================
+// SORGENTE AUDIO — scegli e RICARICA lo sketch
+//   0 = microfono digitale di bordo (default)
+//   1 = jack Line-In blu CN11
+// =============================================================================
+#ifndef AUDIO_USE_LINE_IN
+#define AUDIO_USE_LINE_IN  0
+#endif
+
+#if AUDIO_USE_LINE_IN
+  #define AUDIO_INPUT_SOURCE  INPUT_DEVICE_INPUT_LINE_1
+#else
+  #define AUDIO_INPUT_SOURCE  INPUT_DEVICE_DIGITAL_MICROPHONE_2
+#endif
+
+#define AUDIO_FREQ  AUDIO_FREQUENCY_16K
 
 extern SAI_HandleTypeDef haudio_in_sai;
 
@@ -213,7 +227,7 @@ void draw_status_line() {
   tft.fillRect(0, 0, main_area_w, 10, LTDC_BLACK);
   tft.setTextSize(1);
 
-  // Sinistra: EEPROM + AUTO (SaveEE in rosso durante scrittura)
+  // Sinistra: EEPROM + AUTO + MIC/LINE (fisso a compile-time)
   {
     const char* st = settings_status_text();
     uint16_t col = LTDC_YELLOW;
@@ -222,13 +236,19 @@ void draw_status_line() {
     tft.setTextColor(col, LTDC_BLACK);
     tft.setCursor(0, 1);
     tft.print(st);
-    // padding se stringa corta (evita residui)
-    tft.print("   ");
+    tft.print(" ");
   }
   if (auto_cycle) {
     tft.setTextColor(LTDC_CYAN, LTDC_BLACK);
-    tft.print(" AUTO");
+    tft.print("A ");
   }
+#if AUDIO_USE_LINE_IN
+  tft.setTextColor(LTDC_YELLOW, LTDC_BLACK);
+  tft.print("LINE");
+#else
+  tft.setTextColor(LTDC_GREEN, LTDC_BLACK);
+  tft.print("MIC");
+#endif
 
   // Centro: nome vista
   tft.setTextColor(LTDC_GREEN, LTDC_BLACK);
@@ -477,13 +497,15 @@ void setup() {
   tft.fillScreen(LTDC_BLACK);
   tft.setRotation(0);
   tft.setTextWrap(false);
-  tft.setTextColor(LTDC_GREEN);
+  tft.setTextColor(LTDC_GREEN, LTDC_BLACK);
   tft.setTextSize(1);
   tft.setCursor(0, 2);
-  tft.print("Init Audio...");
+  tft.print("Init...");
   Serial.println("TFT OK");
 
-  // Audio MIC (path stabile, niente switch LINE)
+  // Audio (MIC o LINE a seconda di AUDIO_USE_LINE_IN)
+  Serial.print("Audio source: ");
+  Serial.println(AUDIO_USE_LINE_IN ? "LINE" : "MIC");
   Serial.println("Audio...");
   uint8_t st = BSP_AUDIO_IN_InitEx(
     AUDIO_INPUT_SOURCE,
@@ -509,34 +531,24 @@ void setup() {
     tft.print("Audio OK");
   } else {
     tft.setCursor(0, 10);
-    tft.setTextColor(LTDC_RED);
+    tft.setTextColor(LTDC_RED, LTDC_BLACK);
     tft.print("Audio ERR ");
     tft.println(st);
   }
 
-  delay(400);
+  delay(200);
   tft.fillScreen(LTDC_BLACK);
   memset(sample_hist, 0, sizeof(sample_hist));
   memset(sample_hist_r, 0, sizeof(sample_hist_r));
 
-  // EEPROM DOPO audio (mai prima: rischiava hang)
-  Serial.println("Settings...");
-  Serial.flush();
-  if (settings_load()) Serial.println("EEPROM OK");
-  else Serial.println("defaults");
-  Serial.flush();
-
-  // Se AUTO era salvato ON, riparte il timer ciclo
-  if (auto_cycle) auto_cycle_ms = millis();
-
-  delay(100);
-  tft.fillScreen(LTDC_BLACK);
+  // UI subito (sidebar + vista). EEPROM dopo, nel loop.
+  Serial.println("UI...");
   trigger_view_change();
+  Serial.println("Ready");
 }
 
 // ---------------------------------------------------------------------------
 // Loop principale
-// ---------------------------------------------------------------------------
 void loop() {
   static bool printed = false;
   static uint32_t t_frame = 0;
@@ -545,9 +557,26 @@ void loop() {
   handle_user_button();
   bool was_saving = settings_status_is_saving();
   settings_autosave_poll();
-  // Aggiorna riga stato quando compare/scompare SaveEE
   if (was_saving != settings_status_is_saving())
     draw_status_line();
+
+  // Carica EEPROM una sola volta, dopo che grafica e audio girano
+  static bool settings_tried = false;
+  if (!settings_tried && irq_count > 4) {
+    settings_tried = true;
+    Serial.println("Settings load (deferred)...");
+    Serial.flush();
+    if (settings_load()) {
+      Serial.println("EEPROM OK");
+      if (auto_cycle) auto_cycle_ms = millis();
+      trigger_view_change();  // applica vista/gain salvati
+    } else {
+      Serial.println("defaults");
+    }
+    Serial.flush();
+    draw_status_line();
+    draw_sidebar();
+  }
 
   // AUTO: ogni 60 s passa alla vista successiva (senza salvare ogni passo)
   if (auto_cycle && (millis() - auto_cycle_ms >= 60000UL)) {
@@ -560,10 +589,13 @@ void loop() {
   // Attende un nuovo blocco DMA
   uint32_t twait = millis();
   while (!audio_ready) {
+    handle_touch();
+    handle_user_button();
     if (millis() - twait > 2000) {
-      tft.setCursor(0, 1);
+      draw_status_line();
       tft.setTextColor(LTDC_YELLOW, LTDC_BLACK);
-      tft.print("IRQ=");
+      tft.setCursor(8, 20);
+      tft.print("No audio IRQ=");
       tft.print(irq_count);
       return;
     }
