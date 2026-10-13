@@ -140,13 +140,13 @@ volatile uint8_t  dma_section = 0;      // 0 = half, 1 = full
 //   1 = jack Line-In blu CN11
 // =============================================================================
 #ifndef AUDIO_USE_LINE_IN
-#define AUDIO_USE_LINE_IN  0
+#define AUDIO_USE_LINE_IN  0   /* 0=MIC (stabile), 1=LINE */
 #endif
 
 #if AUDIO_USE_LINE_IN
   #define AUDIO_INPUT_SOURCE  INPUT_DEVICE_INPUT_LINE_1
-  #define AUDIO_IN_VOLUME     30          // volume codec basso su LINE
-  #define AUDIO_LINE_ATTEN    0.06f       // attenuazione campioni (solo LINE)
+  #define AUDIO_IN_VOLUME     70          // volume codec LINE (era 30, troppo basso)
+  #define AUDIO_LINE_ATTEN    0.5f        // attenuazione LINE
 #else
   #define AUDIO_INPUT_SOURCE  INPUT_DEVICE_DIGITAL_MICROPHONE_2
   #define AUDIO_IN_VOLUME     90          // microfono: invariato
@@ -573,7 +573,7 @@ void loop() {
     if (settings_load()) {
       Serial.println("EEPROM OK");
       if (auto_cycle) auto_cycle_ms = millis();
-      trigger_view_change();  // applica vista/gain salvati
+      trigger_view_change();
     } else {
       Serial.println("defaults");
     }
@@ -593,13 +593,10 @@ void loop() {
   // Attende un nuovo blocco DMA
   uint32_t twait = millis();
   while (!audio_ready) {
-    handle_touch();
-    handle_user_button();
     if (millis() - twait > 2000) {
-      draw_status_line();
+      tft.setCursor(0, 1);
       tft.setTextColor(LTDC_YELLOW, LTDC_BLACK);
-      tft.setCursor(8, 20);
-      tft.print("No audio IRQ=");
+      tft.print("IRQ=");
       tft.print(irq_count);
       return;
     }
