@@ -145,8 +145,12 @@ volatile uint8_t  dma_section = 0;      // 0 = half, 1 = full
 
 #if AUDIO_USE_LINE_IN
   #define AUDIO_INPUT_SOURCE  INPUT_DEVICE_INPUT_LINE_1
+  #define AUDIO_IN_VOLUME     30          // volume codec basso su LINE
+  #define AUDIO_LINE_ATTEN    0.06f       // attenuazione campioni (solo LINE)
 #else
   #define AUDIO_INPUT_SOURCE  INPUT_DEVICE_DIGITAL_MICROPHONE_2
+  #define AUDIO_IN_VOLUME     90          // microfono: invariato
+  #define AUDIO_LINE_ATTEN    1.0f        // nessuna attenuazione sul mic
 #endif
 
 #define AUDIO_FREQ  AUDIO_FREQUENCY_16K
@@ -517,7 +521,7 @@ void setup() {
   Serial.println(st);
 
   if (st == AUDIO_OK) {
-    BSP_AUDIO_IN_SetVolume(90);
+    BSP_AUDIO_IN_SetVolume(AUDIO_IN_VOLUME);
     HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(DMA2_Stream7_IRQn);
     HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 5, 0);
@@ -617,8 +621,9 @@ void loop() {
   float rawR[frames];
 
   for (int n = 0; n < frames; n++) {
-    rawL[n] = (float)src[n * 2];
-    rawR[n] = (float)src[n * 2 + 1];
+    // AUDIO_LINE_ATTEN = 1.0 sul MIC (nessun effetto); <1 solo su LINE
+    rawL[n] = (float)src[n * 2]     * AUDIO_LINE_ATTEN;
+    rawR[n] = (float)src[n * 2 + 1] * AUDIO_LINE_ATTEN;
   }
 
   // Scorri la storia e inserisci i nuovi campioni
