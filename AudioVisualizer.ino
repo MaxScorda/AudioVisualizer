@@ -74,6 +74,15 @@ LTDC_F746_Discovery tft;
 #include "BeatMeter.h"
 #include "Mesh3D.h"
 #include "VuNeedle.h"
+#include "RadialSpectrum.h"
+#include "MirrorSpectrum.h"
+#include "PulseRings.h"
+#include "StereoSpace.h"
+#include "SpectroTunnel.h"
+#include "Constellation.h"
+#include "WaveGarden.h"
+#include "PixelRain.h"
+#include "HarmonicLadder.h"
 
 // ---------------------------------------------------------------------------
 // Layout schermo: area grafica a sinistra, sidebar touch a destra
@@ -84,7 +93,7 @@ const int main_area_w = 480 - sidebar_w;   // 400 px
 // ---------------------------------------------------------------------------
 // Stato UI
 // ---------------------------------------------------------------------------
-#define VIEW_COUNT 15
+#define VIEW_COUNT 24
 
 int  viewMode        = 0;     // vista attiva
 int  OldviewMode     = -1;    // per ridisegnare il nome vista solo al cambio
@@ -92,6 +101,7 @@ int  OldviewMode     = -1;    // per ridisegnare il nome vista solo al cambio
 int  eq_color_mode   = 2;     // 0 arcobaleno, 1 VU, 2 Winamp
 int  onda_color_mode = 0;     // palette onda
 int  spectro_res     = 0;     // 0 normal, 1 fast, 2 slow
+int  mesh_fmax_8k    = 0;     // Mesh3D: 0=4kHz, 1=8kHz
 bool eq_peak_enable  = true;  // peak-hold sulle barre EQ
 
 bool     auto_cycle    = false;  // avanzamento automatico viste
@@ -108,12 +118,21 @@ float view_gain[VIEW_COUNT] = {
   0.02f,   // 6  spettro lineare
   0.002f,  // 7  VU barre
   0.08f,   // 8  waterfall + peak
-  1.5f,    // 9  pitch (alto = più lento/stabile)
+  1.5f,    // 9  pitch
   0.28f,   // 10 lissajous
   0.08f,   // 11 persistenza
   0.02f,   // 12 beat
   0.08f,   // 13 mesh 3D
-  8.0f     // 14 VU lancette (sensibilita' tipica 5..15)
+  8.0f,    // 14 VU lancette
+  0.05f,   // 15 radial
+  0.04f,   // 16 mirror
+  2.0f,    // 17 pulse rings
+  2.0f,    // 18 stereo space
+  0.05f,   // 19 tunnel
+  0.08f,   // 20 constellation
+  0.05f,   // 21 wave garden
+  0.06f,   // 22 pixel rain
+  0.08f    // 23 harmonic ladder
 };
 
 // Dopo view_gain / VIEW_COUNT: Settings usa queste variabili
@@ -202,27 +221,42 @@ ArduinoFFT<float> FFT = ArduinoFFT<float>(
 // Helper UI
 // ---------------------------------------------------------------------------
 static bool is_eq_mode()     { return (viewMode >= 1 && viewMode <= 4); }
-static bool is_color_mode()  { return is_eq_mode() || (viewMode == 5); }
+static bool is_color_mode()  {
+  return is_eq_mode() || (viewMode == 5);
+}
+static bool is_newviz_color() {
+  return (viewMode >= 15 && viewMode <= 23);
+}
 static bool is_spectro_mode(){ return (viewMode == 0); }
+static bool is_mesh_mode()   { return (viewMode == 13); }
 
 static const char* view_name(int v) {
   switch (v) {
-    case 0:  return "Spectogram   ";
-    case 1:  return "EQ 8 Bande   ";
-    case 2:  return "EQ 16 Bande  ";
-    case 3:  return "EQ 32 Bande  ";
-    case 4:  return "EQ 48 Bande  ";
+    case 0:  return "Spectrogram  ";
+    case 1:  return "EQ 8         ";
+    case 2:  return "EQ 16        ";
+    case 3:  return "EQ 32        ";
+    case 4:  return "EQ 48        ";
     case 5:  return "Waveform     ";
-    case 6:  return "Spec Log      ";
-    case 7:  return "VU L/R       ";
-    case 8:  return "WF + Peak    ";
-    case 9:  return "Pitch/Note   ";
-    case 10: return "Lissajous XY ";
+    case 6:  return "Spectrum Log ";
+    case 7:  return "VU Meter     ";
+    case 8:  return "Waterfall    ";
+    case 9:  return "Pitch Note   ";
+    case 10: return "Lissajous    ";
     case 11: return "Persistence  ";
     case 12: return "Beat Meter   ";
     case 13: return "Mesh 3D      ";
     case 14: return "VU Needle    ";
-    default: return "???          ";
+    case 15: return "Radial       ";
+    case 16: return "Mirror       ";
+    case 17: return "Pulse Rings  ";
+    case 18: return "Stereo Space ";
+    case 19: return "Tunnel       ";
+    case 20: return "Constellation";
+    case 21: return "Wave Garden  ";
+    case 22: return "Pixel Rain   ";
+    case 23: return "Harmonics    ";
+    default: return "Unknown      ";
   }
 }
 
@@ -312,14 +346,25 @@ void draw_sidebar() {
   tft.print(auto_cycle ? "AUTO ON" : "AUTO OFF");
 
   // COLOR (EQ / onda) oppure RES (spettrogramma)
-  if (is_color_mode()) {
-    tft.fillRect(btn_x, 164, btn_w, 28, 0x8800);  // arancio scuro (non rosa)
+  if (is_color_mode() || is_newviz_color() || viewMode == 18) {
+    tft.fillRect(btn_x, 164, btn_w, 28, 0x8800);
     tft.setTextColor(LTDC_WHITE, 0x8800);
     tft.setCursor(btn_x + 5, 168);
     tft.print("COLOR");
     tft.setCursor(btn_x + 5, 180);
     tft.print("C:");
-    tft.print(viewMode == 5 ? onda_color_mode : eq_color_mode);
+    int cc = eq_color_mode;
+    if (viewMode == 5) cc = onda_color_mode;
+    else if (viewMode == 15) cc = radial_get_color();
+    else if (viewMode == 16) cc = mirror_get_color();
+    else if (viewMode == 17) cc = pulse_get_color();
+    else if (viewMode == 18) cc = stereo_get_color();
+    else if (viewMode == 19) cc = tunnel_get_color();
+    else if (viewMode == 20) cc = const_get_color();
+    else if (viewMode == 21) cc = garden_get_color();
+    else if (viewMode == 22) cc = rain_get_color();
+    else if (viewMode == 23) cc = harm_get_color();
+    tft.print(cc);
   } else if (is_spectro_mode()) {
     tft.fillRect(btn_x, 164, btn_w, 28, 0x8010);
     tft.setTextColor(LTDC_WHITE, 0x8010);
@@ -329,6 +374,14 @@ void draw_sidebar() {
     if (spectro_res == 0)      tft.print("NOR");
     else if (spectro_res == 1) tft.print("FAST");
     else                       tft.print("SLOW");
+  } else if (is_mesh_mode()) {
+    // 4k / 8k range Mesh3D
+    tft.fillRect(btn_x, 164, btn_w, 28, 0x049F);
+    tft.setTextColor(LTDC_WHITE, 0x049F);
+    tft.setCursor(btn_x + 5, 168);
+    tft.print("FMAX");
+    tft.setCursor(btn_x + 5, 180);
+    tft.print(mesh_fmax_8k ? "8k" : "4k");
   }
 
   // Peak EQ
@@ -370,6 +423,15 @@ void trigger_view_change() {
     case 12: beat_meter_init(tft, main_area_w); break;
     case 13: mesh3d_init(tft, main_area_w); break;
     case 14: vu_needle_init(tft, main_area_w); break;
+    case 15: radial_init(tft, main_area_w); break;
+    case 16: mirror_init(tft, main_area_w); break;
+    case 17: pulse_init(tft, main_area_w); break;
+    case 18: stereo_init(tft, main_area_w); break;
+    case 19: tunnel_init(tft, main_area_w); break;
+    case 20: const_init(tft, main_area_w); break;
+    case 21: garden_init(tft, main_area_w); break;
+    case 22: rain_init(tft, main_area_w); break;
+    case 23: harm_init(tft, main_area_w); break;
     default: break;
   }
   draw_sidebar();
@@ -438,12 +500,21 @@ void handle_touch() {
     settings_mark_dirty(true);
     draw_sidebar();
     draw_status_line();
-  } else if (ty >= 164 && ty <= 192 && is_color_mode()) {
+  } else if (ty >= 164 && ty <= 192 && (is_color_mode() || is_newviz_color() || viewMode == 18)) {
     // COLOR
     if (viewMode == 5) {
       onda_color_mode++;
       if (onda_color_mode > 2) onda_color_mode = 0;
-    } else {
+    } else if (viewMode == 15) { radial_set_color(radial_get_color() + 1); }
+    else if (viewMode == 16) { mirror_set_color(mirror_get_color() + 1); }
+    else if (viewMode == 17) { pulse_set_color(pulse_get_color() + 1); }
+    else if (viewMode == 18) { stereo_set_color(stereo_get_color() + 1); }
+    else if (viewMode == 19) { tunnel_set_color(tunnel_get_color() + 1); }
+    else if (viewMode == 20) { const_set_color(const_get_color() + 1); }
+    else if (viewMode == 21) { garden_set_color(garden_get_color() + 1); }
+    else if (viewMode == 22) { rain_set_color(rain_get_color() + 1); }
+    else if (viewMode == 23) { harm_set_color(harm_get_color() + 1); }
+    else {
       eq_color_mode++;
       if (eq_color_mode > 2) eq_color_mode = 0;
     }
@@ -453,6 +524,12 @@ void handle_touch() {
     // RES
     spectro_res++;
     if (spectro_res > 2) spectro_res = 0;
+    settings_mark_dirty();
+    draw_sidebar();
+  } else if (ty >= 164 && ty <= 192 && is_mesh_mode()) {
+    // Mesh FMAX 4k <-> 8k
+    mesh_fmax_8k = mesh_fmax_8k ? 0 : 1;
+    mesh3d_on_range_changed(tft, main_area_w);
     settings_mark_dirty();
     draw_sidebar();
   } else if (ty >= 196 && ty <= 218 && is_eq_mode()) {
@@ -560,9 +637,14 @@ void loop() {
   handle_touch();
   handle_user_button();
   bool was_saving = settings_status_is_saving();
-  settings_autosave_poll();
-  if (was_saving != settings_status_is_saving())
+  settings_autosave_poll();  // fase A: prepara SaveEE; fase B: scrive se UI gia' aggiornata
+  if (settings_need_ui) {
+    // Commit grafico PRIMA della write (la write e' al giro successivo)
+    settings_need_ui = false;
     draw_status_line();
+  } else if (was_saving != settings_status_is_saving()) {
+    draw_status_line();
+  }
 
   // Carica EEPROM una sola volta, dopo che grafica e audio girano
   static bool settings_tried = false;
@@ -718,6 +800,15 @@ void loop() {
     case 12: beat_meter_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
     case 13: mesh3d_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
     case 14: vu_needle_update(rawL, rawR, frames, tft, main_area_w, g); break;
+    case 15: radial_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
+    case 16: mirror_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
+    case 17: pulse_update(rawL, frames, tft, main_area_w, g); break;
+    case 18: stereo_update(rawL, rawR, frames, tft, main_area_w, g); break;
+    case 19: tunnel_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
+    case 20: const_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
+    case 21: garden_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
+    case 22: rain_update(real, SIGNAL_LENGTH, tft, main_area_w, g); break;
+    case 23: harm_update(real, SIGNAL_LENGTH, (float)AUDIO_FREQ, tft, main_area_w, g); break;
     default: break;
   }
 
