@@ -23,6 +23,20 @@ static uint16_t rad_col(int i, int n, float h) {
   return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
+// range bin FFT logaritmico per settore i (40 Hz .. 4 kHz @ 16 kHz)
+static void rad_log_range(int i, int n, int maxB, int* s, int* e) {
+  const float fmin = 40.0f, fmax = 4000.0f;
+  float t0 = (float)i / (float)n;
+  float t1 = (float)(i + 1) / (float)n;
+  float hz0 = expf(logf(fmin) + (logf(fmax) - logf(fmin)) * t0);
+  float hz1 = expf(logf(fmin) + (logf(fmax) - logf(fmin)) * t1);
+  *s = (int)(hz0 * 1024.0f / 16000.0f);
+  *e = (int)(hz1 * 1024.0f / 16000.0f);
+  if (*s < 1) *s = 1;
+  if (*e <= *s) *e = *s + 1;
+  if (*e > maxB) *e = maxB;
+}
+
 inline void radial_init(LTDC_F746_Discovery &tft, int main_area_w) {
   tft.fillRect(0, 11, main_area_w, 261, LTDC_BLACK);
   memset(rad_prev_h, 0, sizeof(rad_prev_h));
@@ -30,8 +44,7 @@ inline void radial_init(LTDC_F746_Discovery &tft, int main_area_w) {
   tft.setTextColor(LTDC_CYAN, LTDC_BLACK);
   tft.setTextSize(1);
   tft.setCursor(4, 14);
-  tft.print("RADIAL");
-  // cerchio centrale UNA volta
+  tft.print("RADIAL LOG");
   int cx = main_area_w / 2, cy = 150;
   tft.fillCircle(cx, cy, 8, LTDC_WHITE);
 }
@@ -43,11 +56,10 @@ inline void radial_update(float* real, int signalLength, LTDC_F746_Discovery &tf
   int maxB = signalLength / 2;
 
   for (int i = 0; i < n; i++) {
-    int s = 1 + (i * (maxB - 1)) / n;
-    int e = 1 + ((i + 1) * (maxB - 1)) / n;
-    if (e <= s) e = s + 1;
+    int s, e;
+    rad_log_range(i, n, maxB, &s, &e);
     float sum = 0; int c = 0;
-    for (int k = s; k < e && k < maxB; k++) { sum += real[k]; c++; }
+    for (int k = s; k < e; k++) { sum += real[k]; c++; }
     int h = (int)((c ? sum / c : 0) * gain * 0.002f);
     if (h > 90) h = 90;
     if (h < 0) h = 0;
@@ -57,13 +69,11 @@ inline void radial_update(float* real, int signalLength, LTDC_F746_Discovery &tf
     int x0 = cx + (int)(ca * 20);
     int y0 = cy + (int)(sa * 20);
 
-    // cancella solo la vecchia raggio (nero)
     if (rad_inited && rad_prev_h[i] > 0) {
       int xo = cx + (int)(ca * (20 + rad_prev_h[i]));
       int yo = cy + (int)(sa * (20 + rad_prev_h[i]));
       tft.drawLine(x0, y0, xo, yo, LTDC_BLACK);
     }
-    // nuova raggio
     if (h > 0) {
       int x1 = cx + (int)(ca * (20 + h));
       int y1 = cy + (int)(sa * (20 + h));
@@ -72,7 +82,6 @@ inline void radial_update(float* real, int signalLength, LTDC_F746_Discovery &tf
     rad_prev_h[i] = h;
   }
   rad_inited = true;
-  // perno: ridisegno leggero solo se necessario (resta stabile)
   tft.fillCircle(cx, cy, 8, LTDC_WHITE);
 }
 #endif

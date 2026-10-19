@@ -17,6 +17,33 @@ static int rain_log_bin(int i, int nCols, int maxB) {
   return b;
 }
 
+// intensità 0..1 da velocità (lento=scuro, veloce=chiaro)
+static uint16_t rain_color_from_speed(float sp, int trail_k, int trail_len) {
+  // sp tipico ~1..17
+  float bright = (sp - 1.0f) / 16.0f;
+  if (bright < 0.12f) bright = 0.12f;
+  if (bright > 1.0f) bright = 1.0f;
+  // coda più scura verso l'alto
+  if (trail_len > 1)
+    bright *= (1.0f - 0.65f * (float)trail_k / (float)trail_len);
+
+  int v5 = (int)(bright * 31.0f);
+  int v6 = (int)(bright * 63.0f);
+  if (v5 < 1) v5 = 1;
+  if (v6 < 2) v6 = 2;
+
+  if (rain_color == 1) {
+    // cyan: G+B
+    return (uint16_t)((0 << 11) | (v6 << 5) | v5);
+  }
+  if (rain_color == 2) {
+    // rosso
+    return (uint16_t)((v5 << 11) | (0 << 5) | 0);
+  }
+  // verde
+  return (uint16_t)((0 << 11) | (v6 << 5) | 0);
+}
+
 inline void rain_init(LTDC_F746_Discovery &tft, int main_area_w) {
   tft.fillRect(0, 11, main_area_w, 261, LTDC_BLACK);
   for (int i = 0; i < RAIN_COLS; i++) {
@@ -39,17 +66,18 @@ inline void rain_update(float* real, int signalLength, LTDC_F746_Discovery &tft,
     int bin = rain_log_bin(i, RAIN_COLS, maxB);
     float mag = real[bin] * gain * 0.002f;
     if (mag > 20) mag = 20;
-    rain_sp[i] = 1.0f + mag * 0.8f;
+    rain_sp[i] = 1.0f + mag * 0.8f;   // più energia → più veloce → più chiaro
     rain_y[i] += rain_sp[i];
     if (rain_y[i] > 240) rain_y[i] = 0;
     int x = i * colW + colW / 2;
     int y = 26 + (int)rain_y[i];
-    uint16_t c = (rain_color == 1) ? 0x07FF : (rain_color == 2) ? 0xF800 : 0x07E0;
     int len = 4 + (int)mag;
     for (int k = 0; k < len; k++) {
       int yy = y - k * 3;
-      if (yy >= 26 && yy < 266)
+      if (yy >= 26 && yy < 266) {
+        uint16_t c = rain_color_from_speed(rain_sp[i], k, len);
         tft.fillRect(x - 1, yy, colW - 2, 2, c);
+      }
     }
   }
 }
